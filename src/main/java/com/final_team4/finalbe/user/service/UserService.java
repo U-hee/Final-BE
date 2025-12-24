@@ -74,7 +74,7 @@ public class UserService {
 
         LlmChannelCreateRequestDto defaultLlmSetting = LlmChannelCreateRequestDto.builder()
                 .name("openAi")
-                .modelName("gpt5")
+                .modelName("gpt-5")
                 .apiKey("")
                 .status(false)
                 .maxTokens(2000)
@@ -109,6 +109,7 @@ public class UserService {
                 .status(true)
                 .clientId("")
                 .clientPw("")
+                .blogId("")
                 .build();
         uploadChannelService.createChannel(user.getId(), uploadChannelDto);
         // 업로드 채널 기본값 채워주기

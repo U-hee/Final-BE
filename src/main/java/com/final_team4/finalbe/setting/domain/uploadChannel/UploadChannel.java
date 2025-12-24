@@ -15,14 +15,16 @@ public class UploadChannel {
     private String apiKey;
     private String clientId;
     private String clientPw;
+    private String blogId;
     private Boolean status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-    public void update(String apiKey, String clientId, String clientPw, Boolean status) {
+    public void update(String apiKey, String clientId, String clientPw, String blogId, Boolean status) {
         this.apiKey = apiKey;
         this.clientId = clientId;
         this.clientPw = clientPw;
+        this.blogId = blogId;
         this.status = status;
         this.updatedAt = LocalDateTime.now();
     }

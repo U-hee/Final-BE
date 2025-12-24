@@ -12,6 +12,7 @@ public class UploadChannelUpdateRequestDto {
     private String apiKey;
     private String clientId;
     private String clientPw;
+    private String blogId;
     private Boolean status;
 
 }

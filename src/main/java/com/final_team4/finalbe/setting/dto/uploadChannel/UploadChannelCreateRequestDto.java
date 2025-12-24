@@ -12,6 +12,7 @@ public class UploadChannelCreateRequestDto {
     private String apiKey;
     private String clientId;
     private String clientPw;
+    private String blogId;
     private Boolean status;
 
     public UploadChannel toEntity(Long userId) {
@@ -21,6 +22,7 @@ public class UploadChannelCreateRequestDto {
                 .apiKey(apiKey)
                 .clientId(clientId)
                 .clientPw(clientPw)
+                .blogId(blogId)
                 .status(status)
                 .build();
     }

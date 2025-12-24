@@ -15,6 +15,7 @@ public class UploadChannelCreateResponseDto {
     private Long userId;
     private Channel name;
     private String apiKey;
+    private String blogId;
     private Boolean status;
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", timezone = "Asia/Seoul")
     private LocalDateTime createdAt;
@@ -27,6 +28,7 @@ public class UploadChannelCreateResponseDto {
                 .userId(channel.getUserId())
                 .name(channel.getName())
                 .apiKey(channel.getApiKey())
+                .blogId(channel.getBlogId())
                 .status(channel.getStatus())
                 .createdAt(channel.getCreatedAt())
                 .updatedAt(channel.getUpdatedAt())

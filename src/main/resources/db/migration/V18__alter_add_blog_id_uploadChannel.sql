@@ -1,0 +1,1 @@
+alter table UPLOAD_CHANNEL add (blog_id varchar2(100));

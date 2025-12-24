@@ -50,6 +50,7 @@ public class UploadChannelService {
                 requestDto.getApiKey(),
                 requestDto.getClientId(),
                 requestDto.getClientPw(),
+                requestDto.getBlogId(),
                 requestDto.getStatus()
         );
         uploadChannelMapper.update(entity);

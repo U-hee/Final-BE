@@ -1,4 +1,5 @@
 import {
+  aws_certificatemanager as acm,
   aws_cloudwatch as cloudwatch,
   aws_ec2 as ec2,
   aws_ecs as ecs,
@@ -13,6 +14,14 @@ import {
   CfnParameter,
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
+
+// .env 파일 로드 (dotenv가 이미 설치되어 있음)
+const envPath = require('path').resolve(__dirname, '..', '..', '.env');
+try {
+  require('dotenv').config({ path: require('path').resolve(__dirname, '..', '..', '.env') });
+} catch (e) {
+  // dotenv 로드 실패 시 무시 (환경변수로 직접 설정 가능)
+}
 
 export class InfraStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -49,6 +58,20 @@ export class InfraStack extends Stack {
       process.env.PYTHON_URL || this.node.tryGetContext("pythonUrl") || "";
     const frontUrl =
       process.env.FRONT_URL || this.node.tryGetContext("frontUrl") || "";
+    const internalToken =
+      process.env['internal.token'] || 
+      process.env.INTERNAL_TOKEN || 
+      this.node.tryGetContext("internalToken") || 
+      "";
+
+    // Python service image URI
+    const pythonImageUri =
+      process.env.PYTHON_IMAGE_URI || this.node.tryGetContext("pythonImageUri");
+    if (!pythonImageUri) {
+      throw new Error(
+        "PYTHON_IMAGE_URI must be provided via env or CDK context."
+      );
+    }
 
     const vpc = new ec2.Vpc(this, "Vpc", {
       maxAzs: 2,
@@ -76,6 +99,7 @@ export class InfraStack extends Stack {
       allowAllOutbound: true,
     });
     albSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), "Allow HTTP");
+    albSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), "Allow HTTPS");
 
     const backendSG = new ec2.SecurityGroup(this, "BackendServiceSecurityGroup", {
       vpc,
@@ -83,6 +107,15 @@ export class InfraStack extends Stack {
       allowAllOutbound: true,
     });
     backendSG.addIngressRule(albSG, ec2.Port.tcp(80), "ALB to BE");
+
+    // Python service security group
+    const pythonSG = new ec2.SecurityGroup(this, "PythonServiceSecurityGroup", {
+      vpc,
+      description: "Allows backend ECS to access Python service",
+      allowAllOutbound: true,
+    });
+    // Backend에서 Python 서비스로 접근 허용
+    pythonSG.addIngressRule(backendSG, ec2.Port.tcp(8000), "Backend to Python");
 
     const dbSG = new ec2.SecurityGroup(this, "DatabaseSecurityGroup", {
       vpc,
@@ -156,6 +189,140 @@ export class InfraStack extends Stack {
       })
     );
 
+    // ============================================
+    // Load Balancers (먼저 생성하여 서비스에서 참조)
+    // ============================================
+
+    // Backend ALB (외부 노출)
+    const alb = new elbv2.ApplicationLoadBalancer(
+      this,
+      "ApplicationLoadBalancer",
+      {
+        vpc,
+        internetFacing: true,
+        securityGroup: albSG,
+        loadBalancerName: "ALB",
+      }
+    );
+
+    // Python service internal ALB (내부 전용)
+    const pythonInternalALB = new elbv2.ApplicationLoadBalancer(
+      this,
+      "PythonInternalALB",
+      {
+        vpc,
+        internetFacing: false, // Internal only
+        securityGroup: pythonSG,
+        loadBalancerName: "PythonInternalALB",
+      }
+    );
+
+    // Python service URL (백엔드에서 사용)
+    const pythonServiceUrl = pythonUrl || `http://${pythonInternalALB.loadBalancerDnsName}:8000`;
+
+    // Backend URL for Python service to call backend APIs
+    const backendUrl = `http://${alb.loadBalancerDnsName}`;
+
+    // ACM Certificate ARN 또는 ID (환경 변수에서 필수로 받음)
+    const certificateArnOrId =
+      process.env.CERTIFICATE_ARN ||
+      process.env.CERTIFICATE_ID ||
+      this.node.tryGetContext("certificateArn") ||
+      this.node.tryGetContext("certificateId");
+    
+    if (!certificateArnOrId) {
+      throw new Error(
+        "CERTIFICATE_ARN or CERTIFICATE_ID must be provided via .env file or CDK context."
+      );
+    }
+
+    // 인증서 ID만 제공된 경우 ARN으로 변환, 이미 ARN인 경우 그대로 사용
+    const certificateArn = certificateArnOrId.startsWith("arn:aws:acm:")
+      ? certificateArnOrId
+      : `arn:aws:acm:${this.region}:${this.account}:certificate/${certificateArnOrId}`;
+
+    // ACM Certificate 참조
+    const certificate = acm.Certificate.fromCertificateArn(
+      this,
+      "Certificate",
+      certificateArn
+    );
+
+    // ============================================
+    // Python Service Resources
+    // ============================================
+
+    // Python service task definition
+    const pythonTask = new ecs.FargateTaskDefinition(
+      this,
+      "PythonTaskDef",
+      {
+        cpu: 512,
+        memoryLimitMiB: 1024,
+        executionRole: executionRole,
+      }
+    );
+
+    const pythonContainer = pythonTask.addContainer("PythonContainer", {
+      image: ecs.ContainerImage.fromRegistry(pythonImageUri),
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: `${logPrefix}-python`,
+      }),
+      environment: {
+        BACKEND_URL: backendUrl,
+        X_INTERNAL_TOKEN: internalToken,
+      },
+    });
+    pythonContainer.addPortMappings({ containerPort: 8000 });
+
+    const pythonListener = pythonInternalALB.addListener("PythonListener", {
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      port: 8000,
+      open: true,
+    });
+
+    // Python service
+    const pythonService = new ecs.FargateService(this, "Python-Service", {
+      cluster,
+      taskDefinition: pythonTask,
+      assignPublicIp: false,
+      desiredCount: desiredCount,
+      securityGroups: [pythonSG],
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      healthCheckGracePeriod: Duration.seconds(60),
+      minHealthyPercent: 100,
+      maxHealthyPercent: 200,
+    });
+
+    const pythonCfn = pythonService.node.defaultChild as ecs.CfnService;
+    pythonCfn.deploymentConfiguration = {
+      deploymentCircuitBreaker: {
+        enable: true,
+        rollback: true,
+      },
+      maximumPercent: 200,
+      minimumHealthyPercent: 100,
+    };
+
+    // Python service target group
+    const pythonTargetGroup = pythonListener.addTargets("PythonTargetGroup", {
+      port: 8000,
+      targets: [
+        pythonService.loadBalancerTarget({
+          containerName: "PythonContainer",
+          containerPort: 8000,
+        }),
+      ],
+      healthCheck: {
+        path: "/health", // Python 서비스의 헬스 체크 경로 (필요시 수정)
+        interval: Duration.seconds(30),
+      },
+    });
+
+    // ============================================
+    // Backend Service Resources
+    // ============================================
+
     const backendTask = new ecs.FargateTaskDefinition(
       this,
       "BackendTaskDef",
@@ -176,8 +343,9 @@ export class InfraStack extends Stack {
         SPRING_DOCKER_COMPOSE_ENABLED: "false",
         SPRING_DOCKER_COMPOSE_SKIP_IN_BACKGROUND: "true",
         JWT_SECRET: jwtSecret,
-        PYTHON_URL: pythonUrl,
+        PYTHON_URL: pythonServiceUrl, // Python 서비스 내부 ALB URL 사용
         FRONT_URL: frontUrl,
+        INTERNAL_TOKEN: internalToken,
       },
       secrets: {
         SPRING_DATASOURCE_PASSWORD: ecs.Secret.fromSecretsManager(dbSecret, "password"),
@@ -206,36 +374,52 @@ export class InfraStack extends Stack {
       minimumHealthyPercent: 100,
     };
 
-    const alb = new elbv2.ApplicationLoadBalancer(
+    // Backend Target Group (리스너와 독립적으로 생성)
+    const backendTargetGroup = new elbv2.ApplicationTargetGroup(
       this,
-      "ApplicationLoadBalancer",
+      "BackendTargetGroup",
       {
         vpc,
-        internetFacing: true,
-        securityGroup: albSG,
-        loadBalancerName: "ALB",
+        port: 8080,
+        protocol: elbv2.ApplicationProtocol.HTTP,
+        targetType: elbv2.TargetType.IP,
+        targets: [
+          backendService.loadBalancerTarget({
+            containerName: "BackendContainer",
+            containerPort: 8080,
+          }),
+        ],
+        healthCheck: {
+          path: "/actuator/health",
+          interval: Duration.seconds(30),
+          healthyHttpCodes: "200",
+        },
       }
     );
 
-    const listener = alb.addListener("HttpListener", {
+    // HTTPS Listener (포트 443)
+    const httpsListener = alb.addListener("HttpsListener", {
+      protocol: elbv2.ApplicationProtocol.HTTPS,
+      port: 443,
+      certificates: [certificate],
+      defaultTargetGroups: [backendTargetGroup],
+      open: true,
+    });
+
+    // HTTP Listener (포트 80) - HTTPS로 리다이렉트
+    const httpListener = alb.addListener("HttpListener", {
       protocol: elbv2.ApplicationProtocol.HTTP,
       port: 80,
       open: true,
     });
 
-    // Backend target group as default (all traffic goes to backend)
-    const backendTargetGroup = listener.addTargets("BackendTargetGroup", {
-      port: 80,
-      targets: [
-        backendService.loadBalancerTarget({
-          containerName: "BackendContainer",
-          containerPort: 8080,
-        }),
-      ],
-      healthCheck: {
-        path: "/actuator/health",
-        interval: Duration.seconds(30),
-      },
+    // HTTP에서 HTTPS로 리다이렉트
+    httpListener.addAction("RedirectToHttps", {
+      action: elbv2.ListenerAction.redirect({
+        protocol: "HTTPS",
+        port: "443",
+        permanent: true,
+      }),
     });
 
     const backend5xxAlarm = new cloudwatch.Alarm(this, "BackendFiveXXAlarm", {
@@ -248,8 +432,5 @@ export class InfraStack extends Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       alarmDescription: "API 오류가 감지되면 자동 롤백 트리거",
     });
-
-    // AI batch jobs will run via ECS tasks later; Lambda and event targets removed for now.
   }
 }
-

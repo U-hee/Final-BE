@@ -1,0 +1,157 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # 수동 실행도 가능
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY_NAME: ${{ secrets.ECR_REPOSITORY_NAME || 'final-be' }}
+  CDK_VERSION: "2"
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ============================================
+      # Backend Docker Image Build and Push
+      # ============================================
+      - name: Login to Amazon ECR (Backend)
+        id: login-ecr-backend
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create ECR repository if not exists (Backend)
+        run: |
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY_NAME }} --region ${{ env.AWS_REGION }} || \
+          aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Build, tag, and push backend image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr-backend.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:latest
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:latest
+          echo "BACKEND_IMAGE_URI=$ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:latest" >> $GITHUB_ENV
+          echo "Backend image URI: $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:latest"
+
+      # ============================================
+      # Python Image URI 설정
+      # Python 이미지는 별도 레포지토리에서 빌드되어 ECR에 이미 존재한다고 가정
+      # ============================================
+      - name: Set Python Image URI
+        run: |
+          if [ -n "${{ secrets.PYTHON_IMAGE_URI }}" ]; then
+            echo "PYTHON_IMAGE_URI=${{ secrets.PYTHON_IMAGE_URI }}" >> $GITHUB_ENV
+            echo "Using Python image URI from secrets: ${{ secrets.PYTHON_IMAGE_URI }}"
+          else
+            echo "Error: PYTHON_IMAGE_URI secret is required. Python image must be built and pushed to ECR separately."
+            exit 1
+          fi
+
+      # ============================================
+      # CDK Deploy
+      # ============================================
+      - name: Install CDK dependencies
+        working-directory: ./infra
+        run: |
+          npm ci
+
+      - name: CDK Synth
+        working-directory: ./infra
+        env:
+          BACKEND_IMAGE_URI: ${{ env.BACKEND_IMAGE_URI }}
+          PYTHON_IMAGE_URI: ${{ env.PYTHON_IMAGE_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          FRONT_URL: ${{ secrets.FRONT_URL }}
+          INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
+          CERTIFICATE_ID: ${{ secrets.CERTIFICATE_ID }}
+        run: |
+          echo "CDK Synth with environment variables:"
+          echo "BACKEND_IMAGE_URI: $BACKEND_IMAGE_URI"
+          echo "PYTHON_IMAGE_URI: $PYTHON_IMAGE_URI"
+          echo "CERTIFICATE_ID: $CERTIFICATE_ID"
+          npx cdk synth
+
+      - name: CDK Deploy
+        working-directory: ./infra
+        env:
+          BACKEND_IMAGE_URI: ${{ env.BACKEND_IMAGE_URI }}
+          PYTHON_IMAGE_URI: ${{ env.PYTHON_IMAGE_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          FRONT_URL: ${{ secrets.FRONT_URL }}
+          INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
+          CERTIFICATE_ID: ${{ secrets.CERTIFICATE_ID }}
+        run: |
+          echo "CDK Deploy with environment variables:"
+          echo "BACKEND_IMAGE_URI: $BACKEND_IMAGE_URI"
+          echo "PYTHON_IMAGE_URI: $PYTHON_IMAGE_URI"
+          echo "CERTIFICATE_ID: $CERTIFICATE_ID"
+          # ECS_DESIRED_COUNT가 설정되지 않으면 기본값 1 사용 (CDK 파라미터 기본값 활용)
+          ECS_COUNT="${{ secrets.ECS_DESIRED_COUNT }}"
+          if [ -z "$ECS_COUNT" ]; then
+            ECS_COUNT="1"
+          fi
+          echo "ECS_DESIRED_COUNT: $ECS_COUNT"
+          npx cdk deploy --all --require-approval never --parameters EcsDesiredCount=$ECS_COUNT
+
+      # ============================================
+      # ECS Service Force Redeploy (Optional)
+      # ============================================
+      - name: Force ECS service redeployment
+        if: success()
+        env:
+          CLUSTER_NAME: ${{ secrets.ECS_CLUSTER_NAME || 'Cluster' }}
+          BACKEND_SERVICE_NAME: ${{ secrets.ECS_BACKEND_SERVICE_NAME }}
+          PYTHON_SERVICE_NAME: ${{ secrets.ECS_PYTHON_SERVICE_NAME }}
+        run: |
+          if [ -n "$BACKEND_SERVICE_NAME" ]; then
+            aws ecs update-service \
+              --cluster $CLUSTER_NAME \
+              --service $BACKEND_SERVICE_NAME \
+              --force-new-deployment \
+              --region ${{ env.AWS_REGION }} || echo "Backend service redeploy skipped"
+          fi
+          
+          if [ -n "$PYTHON_SERVICE_NAME" ]; then
+            aws ecs update-service \
+              --cluster $CLUSTER_NAME \
+              --service $PYTHON_SERVICE_NAME \
+              --force-new-deployment \
+              --region ${{ env.AWS_REGION }} || echo "Python service redeploy skipped"
+          fi
+

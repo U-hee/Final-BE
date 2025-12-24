@@ -1,6 +1,8 @@
 package com.final_team4.finalbe.trend.service;
 
 import com.final_team4.finalbe._core.exception.ContentNotFoundException;
+import com.final_team4.finalbe.logger.aop.Loggable;
+import com.final_team4.finalbe.logger.domain.type.LogType;
 import com.final_team4.finalbe.setting.dto.llm.LlmChannelDetailResponseDto;
 import com.final_team4.finalbe.setting.service.llm.LlmChannelService;
 import com.final_team4.finalbe.restClient.service.RestClientCallerService;
@@ -31,6 +33,7 @@ public class TrendService {
 
     // 인기검색어 저장(python 호출용)
     @Transactional
+    @Loggable(value = "트렌드 데이터 생성 요청", type = LogType.INFO)
     public List<TrendCreateResponseDto> createTrends(List<TrendCreateRequestDto> requests) {
         if (requests == null || requests.isEmpty()) {
             return List.of();
@@ -52,6 +55,7 @@ public class TrendService {
     }
 
     // 인기검색어 목록 조회
+    @Loggable(value = "트렌드 목록 조회", type = LogType.INFO)
     public TrendListResponseDto getTrends(int page, int size, TrendSnsType snsType) {
         int offset = page * size;
         List<TrendResponseDto> trends = trendMapper.findAll(size, offset, snsType).stream()
@@ -63,6 +67,7 @@ public class TrendService {
 
     // 인기검색어 컨텐츠 생성 요청(python에 요청)
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    @Loggable(value = "트렌드 콘텐츠 생성 요청", type = LogType.INFO)
     public TrendCreateContentResponseDto requestCreateContent(TrendCreateContentRequestDto request, Long userId) {
         // 유저 업로드 채널 정보 조회
         List<UploadChannelItemPayloadDto> channels = uploadChannelService.getChannelsByUserId(userId);

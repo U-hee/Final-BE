@@ -16,6 +16,7 @@ public class UploadChannelUpdateResponseDto {
     private String apiKey;
     private String clientId;
     private String clientPw;
+    private String blogId;
     private Boolean status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -28,6 +29,7 @@ public class UploadChannelUpdateResponseDto {
                 .apiKey(channel.getApiKey())
                 .clientId(channel.getClientId())
                 .clientPw(channel.getClientPw())
+                .blogId(channel.getBlogId())
                 .status(channel.getStatus())
                 .createdAt(channel.getCreatedAt())
                 .updatedAt(channel.getUpdatedAt())

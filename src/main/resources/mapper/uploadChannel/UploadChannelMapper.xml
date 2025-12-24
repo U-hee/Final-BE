@@ -12,6 +12,7 @@
                status,
                client_id,
                client_pw,
+               blog_id,
                created_at,
                updated_at
         FROM UPLOAD_CHANNEL
@@ -26,6 +27,7 @@
                status,
                client_id,
                client_pw,
+               blog_id,
                created_at,
                updated_at
         FROM UPLOAD_CHANNEL
@@ -44,6 +46,7 @@
                status,
                client_id,
                client_pw,
+               blog_id,
                created_at,
                updated_at
         FROM UPLOAD_CHANNEL
@@ -59,14 +62,16 @@
             status,
             api_key,
             client_id,
-            client_pw
+            client_pw,
+            blog_id
         ) VALUES (
                      #{userId},
                      #{name},
                      #{status},
                      #{apiKey},
                      #{clientId},
-                     #{clientPw}
+                     #{clientPw},
+                    #{blogId}
                  )
     </insert>
 
@@ -75,6 +80,7 @@
             api_key = #{apiKey},
             client_id = #{clientId},
             client_pw = #{clientPw},
+            blog_id = #{blogId},
             status = #{status},
             UPDATED_AT = sysdate
         where

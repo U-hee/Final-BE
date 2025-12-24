@@ -3,6 +3,8 @@ package com.final_team4.finalbe.content.service;
 import com.final_team4.finalbe.content.domain.*;
 import com.final_team4.finalbe.content.dto.*;
 import com.final_team4.finalbe.content.mapper.ContentMapper;
+import com.final_team4.finalbe.logger.aop.Loggable;
+import com.final_team4.finalbe.logger.domain.type.LogType;
 import com.final_team4.finalbe.product.dto.*;
 import com.final_team4.finalbe.product.mapper.ProductContentMapper;
 import com.final_team4.finalbe.product.service.ProductService;
@@ -30,6 +32,7 @@ public class ContentService {
     private final RestClientCallerService restClientCallerService;
 
     // 검수할 컨텐츠 목록 조회
+    @Loggable(value = "컨텐츠 목록 조회", type = LogType.INFO)
     public ContentPagedResponseDto getContents(Long userId, int page, int size, ContentStatus status) {
         int offset = page * size;
         List<Content> contents = contentMapper.findAll(userId, status, size, offset);
@@ -41,6 +44,7 @@ public class ContentService {
     }
 
     // 컨텐츠 상세 조회
+    @Loggable(value = "컨텐츠 상세 조회", type = LogType.INFO)
     public ContentDetailResponseDto getContentDetail(Long userId, Long id) {
         Content content = getVerifiedContent(userId, id);
         return ContentDetailResponseDto.from(content);
@@ -48,6 +52,7 @@ public class ContentService {
 
     // 컨텐츠 등록(파이썬에서 호출)
     @Transactional
+    @Loggable(value = "컨텐츠 생성", type = LogType.INFO)
     public ContentCreateResponseDto createContent(ContentCreateRequestDto request) {
         // 1. 채널 조회 및 소유권 검증
         UploadChannelItemPayloadDto channel = uploadChannelService.getActiveChannelById(request.getUserId());
@@ -101,6 +106,7 @@ public class ContentService {
 
     // 컨텐츠 수정
     @Transactional
+    @Loggable(value = "컨텐츠 수정", type = LogType.INFO)
     public ContentUpdateResponseDto updateContent(Long userId, Long id, @Valid ContentUpdateRequestDto request) {
         Content content = getVerifiedContent(userId, id);
 
@@ -112,6 +118,7 @@ public class ContentService {
 
     // 컨텐츠 상태 변경
     @Transactional
+    @Loggable(value = "컨텐츠 상태 변경", type = LogType.INFO)
     public ContentUpdateResponseDto updateContentStatus(Long userId, Long id, @Valid ContentStatusUpdateRequestDto request) {
         Content content = getVerifiedContent(userId, id);
 
@@ -132,6 +139,7 @@ public class ContentService {
 
     // 파이썬에서 호출하여 링크만 갱신
     @Transactional
+    @Loggable(value = "컨텐츠 링크 갱신", type = LogType.INFO)
     public void updateContentLink(ContentLinkUpdateRequestDto request) {
         Content content = contentMapper.findByJobId(request.getJobId());
         if (content == null) {
@@ -141,6 +149,7 @@ public class ContentService {
         contentMapper.updateLinkByJobId(request.getJobId(), request.getLink());
     }
 
+    @Loggable(value = "JOB ID로 컨텐츠 조회", type = LogType.INFO)
     public ContentDetailResponseDto getContentByJobId(String jobId) {
         Content content = contentMapper.findByJobId(jobId);
         if (content == null) {
